@@ -1,0 +1,123 @@
+#!/usr/bin/loadgen
+# -*-perl-*-
+
+use strict;
+use HTTP::LoadGen::Run;
+use HTTP::LoadGen::Logger;
+use HTTP::LoadGen::ScoreBoard;
+use Math::Random::MT;
+
+# possible hook parameters:
+# $procnr   -- the current process number 0 .. NWorker-1
+# $el       -- an URL element to fetch (ARRAY)
+#              use RQ_* constants from HTTP::LoadGen::Run to access
+# $rc       -- an result element (ARRAY)
+#              use RC_* constants from HTTP::LoadGen::Run to access
+
+my $logger;
++{
+  NWorker=>3,			# use 3 processes
+  RampUpStart=>2,		# start 2 threads immediately
+  RampUpMax=>13,		# then add 11 threads over 5 seconds
+  RampUpDuration=>5,		# that makes 2.2 new threads per second
+
+  ParentInit=>sub {
+    # no parameters
+
+    # create scoreboard
+    HTTP::LoadGen::ScoreBoard::init 'scoreboard.sb',
+	@{HTTP::LoadGen::options()}{qw/NWorker SbSlotsz SbExtra/};
+  },
+  ParentExit=>sub {
+    # no parameters
+    undef HTTP::LoadGen::ScoreBoard::scoreboard;
+  },
+
+  ProcInit=>sub {
+    my ($procnr)=@_;
+
+    # set my slot number
+    HTTP::LoadGen::ScoreBoard::slot=$procnr;
+
+    # acquire a logger
+    my $fmt='%-2d %d %d %2d %2d %3d %3d %.3f %.3f %.3f %.3f %.3f %s %d '.
+	    "%s(%s://%s:%s%s)\n";
+    $logger=HTTP::LoadGen::Logger::get undef, sub {sprintf $fmt, @_};
+  },
+  ProcExit=>sub {
+    my ($procnr)=@_;
+    $logger->();		# close the logger
+  },
+
+  ThreadInit=>sub {
+    # no parameters
+
+    # thread accounting
+    HTTP::LoadGen::ScoreBoard::thread_start;
+
+    # set a thread specific RNG
+    HTTP::LoadGen::rng=Math::Random::MT->new(HTTP::LoadGen::threadnr);
+
+    return [];			# initializes thread specific user data
+  },
+  ThreadExit=>sub {
+    # no parameters
+    HTTP::LoadGen::ScoreBoard::thread_done;
+  },
+
+  ReqStart=>sub {
+    my ($el)=@_;
+
+    # request accounting
+    HTTP::LoadGen::ScoreBoard::req_start;
+
+    # started - succeeded - failed = currently pending number of requests
+    @{HTTP::LoadGen::userdata()}=(HTTP::LoadGen::ScoreBoard::thread_count,
+				  HTTP::LoadGen::ScoreBoard::req_started
+				  -HTTP::LoadGen::ScoreBoard::req_success()
+				  -HTTP::LoadGen::ScoreBoard::req_failed());
+  },
+
+  ReqDone=>sub {
+    my ($rc, $el)=@_;
+
+    # request accounting: HTTP status 2xx and 3xx are successful
+    #                     other requests are counted as failures.
+    HTTP::LoadGen::ScoreBoard::req_done
+	scalar($rc->[RC_STATUS]=~/^[23]/), $rc->[RC_HEADERS], $rc->[RC_BODY];
+
+    $logger->(HTTP::LoadGen::threadnr,
+	      @{$rc}[RC_DNSCACHED, RC_CONNCACHED],
+	      @{HTTP::LoadGen::userdata()},
+	      HTTP::LoadGen::ScoreBoard::req_success,
+	      HTTP::LoadGen::ScoreBoard::req_failed,
+	      $rc->[RC_STARTTIME],
+	      $rc->[RC_CONNTIME]-$rc->[RC_STARTTIME],
+	      $rc->[RC_FIRSTTIME]-$rc->[RC_STARTTIME],
+	      $rc->[RC_HEADERTIME]-$rc->[RC_STARTTIME],
+	      $rc->[RC_BODYTIME]-$rc->[RC_STARTTIME],
+	      $rc->[RC_STATUS],
+	      length($rc->[RC_BODY]),
+	      @{$el}[RQ_METHOD, RQ_SCHEME, RQ_HOST, RQ_PORT, RQ_URI]);
+  },
+
+  dnscache=>{
+	     localhost=>'127.0.0.1',
+	     'kabatinte.net'=>'84.38.75.176',
+	     'www.kabatinte.net'=>'84.38.75.176',
+	     'foertsch.name'=>'109.73.51.50',
+	    },
+
+  times=>3,			# run the URL list 3 times
+
+  InitURLs=>'random_start_follow',
+
+  URLList=>do {
+    my $o={
+	   keepalive=>KEEPALIVE,
+	   qw!predelay 0.05 prejitter 0.1 postdelay 0.5 postjitter 1!,
+	  };
+    [[qw!GET http foertsch.name 80 /-redir!, $o],
+     [qw!HUGO https www.kabatinte.net 443 /!, $o]];
+  },
+ }

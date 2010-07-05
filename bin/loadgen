@@ -1,0 +1,73 @@
+#!perl
+#line 3
+
+use strict;
+
+use HTTP::LoadGen;
+
+my ($o, $fn);
+my $usage=<<'USAGE';
+Usage: loadgen configfile
+       loadgen - <configfile
+       loadgen <configfile
+       loadgen -h[elp]
+  -h - print this message
+  otherwise read config either from specified file or from STDIN and
+  behave accordingly.
+USAGE
+
+if( @ARGV and $ARGV[0]!~/^--?h/ ) {
+  $o=do ($fn=$ARGV[0]);
+} elsif( !@ARGV or $ARGV[0] eq '-' ) {
+  $fn="STDIN";
+  local $/;
+  $o=eval readline STDIN;
+} else {
+  warn $usage;
+  exit 0;
+}
+
+die "Cannot parse $fn: ".($@||"$!\n")."\n".$usage unless ($o);
+
+HTTP::LoadGen::loadgen $o;
+__END__
+
+=encoding utf8
+
+=head1 NAME
+
+loadgen - a HTTP load generator
+
+=head1 SYNOPSIS
+
+ loadgen configfile
+ loadgen <configfile
+ loadgen - <configfile
+ loadgen -h[elp]
+
+can also be used in a shebang line to make the config file executable:
+
+ #!/usr/bin/loadgen
+ ...
+
+=head1 DESCRIPTION
+
+C<loadgen> is just a very simple frontend to L<HTTP::LoadGen>.
+
+=head1 SEE ALSO
+
+L<HTTP::LoadGen>
+
+=head1 AUTHOR
+
+Torsten Förtsch, E<lt>torsten.foertsch@gmx.netE<gt>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2010 by Torsten Förtsch
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself, either Perl version 5.10.0 or,
+at your option, any later version of Perl 5 you may have available.
+
+=cut

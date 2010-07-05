@@ -1,0 +1,14 @@
+--- #YAML:1.0
+name:                HTTP-LoadGen
+version:             0.01
+abstract:            a HTTP load generator toolset
+license:             ~
+author:              
+    - Torsten Förtsch <torsten.foertsch@gmx.net>
+generated_by:        ExtUtils::MakeMaker version 6.42
+distribution_type:   module
+requires:     
+    IPC::ScoreBoard:               0.03
+meta-spec:
+    url:     http://module-build.sourceforge.net/META-spec-v1.3.html
+    version: 1.3
