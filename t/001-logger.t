@@ -7,10 +7,10 @@ use Test::More tests => 4;
 #use Test::More 'no_plan';
 use HTTP::LoadGen::Logger;
 
-open my $f1, '>', 'log1' or die "Cannot open log1: $!";
-open my $f2, '>', 'log2' or die "Cannot open log2: $!";
-
-my @l=map {HTTP::LoadGen::Logger::get $_} $f1, $f2;
+my @l=map {
+  open my $f, '>', $_ or die "Cannot open $_: $!";
+  HTTP::LoadGen::Logger::get $f;
+} qw!log1 log2!;
 
 isa_ok $l[0], 'CODE', '$l[0]';
 isa_ok $l[1], 'CODE', '$l[1]';
@@ -23,8 +23,8 @@ map {$_->()} @l;
 
 {
   local $/;
-  local @ARGV=('log1');
-  is scalar(readline), <<'EOF', 'log1 content';
+  open my $f, 'log1' or die "Cannot open log1: $!";
+  is scalar(readline $f), <<'EOF', 'log1 content';
 0
 2
 4
@@ -35,8 +35,8 @@ EOF
 
 {
   local $/;
-  local @ARGV=('log2');
-  is scalar(readline), <<'EOF', 'log2 content';
+  open my $f, 'log2' or die "Cannot open log2: $!";
+  is scalar(readline $f), <<'EOF', 'log2 content';
 1
 3
 5

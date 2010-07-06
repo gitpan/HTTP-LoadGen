@@ -39,5 +39,6 @@ is_deeply [SB::get_all $sb, 0], [20, 10, 10], 'slot 0';
 is_deeply [SB::get_all $sb, 1], [22, 11, 11], 'slot 1';
 is_deeply [SB::get_all $sb, 2], [24, 12, 12], 'slot 2';
 
-is_deeply [sort {$a->[0]<=>$b->[0]} values %$status], [[0,11], [7,0], [8,0]],
+is_deeply [map {$#{$_}=1; $_} sort {$a->[0]<=>$b->[0]} values %$status],
+  [[0,11], [7,0], [8,0]],
   "HTTP::LoadGen::start_proc result";

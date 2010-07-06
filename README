@@ -66,6 +66,14 @@ DEPENDENCIES
 
     *   IPC::ScoreBoard
 
+    *   Coro
+
+    *   AnyEvent
+
+    *   Async::Interrupt
+
+    *   Net::SSLeay
+
 DESCRIPTION
     This module implements a multi-process and multi-thread load generator
     for HTTP. It uses Coro threads. So, in reality it does not use threads

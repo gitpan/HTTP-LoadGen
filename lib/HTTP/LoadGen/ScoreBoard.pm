@@ -13,7 +13,7 @@ package HTTP::LoadGen::ScoreBoard;
 use strict;
 use IPC::ScoreBoard;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use constant {
   SC_THREADCOUNT=>0,		# scoreboard items
@@ -124,7 +124,7 @@ BEGIN {
     *req_done=sub ($$$) {
       my ($success, $hdr, $body)=@_;
       SB::incr $scoreboard, $myslot,
-	  $extra+($success ? SC_REQ_SUCCESS : SC_REQ_FAILED);
+	  $slotsz+($success ? SC_REQ_SUCCESS : SC_REQ_FAILED);
       SB::incr $scoreboard, $myslot, $slotsz+SC_BODY_BYTES, length $body;
       SB::incr $scoreboard, $myslot, $slotsz+SC_HEADER_COUNT, 0+keys %$hdr;
       my $sum=0;

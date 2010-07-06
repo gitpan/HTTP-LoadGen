@@ -7,6 +7,10 @@ WriteMakefile
    VERSION_FROM   => 'lib/HTTP/LoadGen.pm',
    PREREQ_PM      => {
 		      'IPC::ScoreBoard' => 0.03,
+		      'Coro' => '5.23',
+		      'AnyEvent' => '5.261',
+		      'Async::Interrupt' => '1.05', # to get reliable SIGCHLD
+		      'Net::SSLeay' => '1.35',
 		     },
    ABSTRACT_FROM  => 'lib/HTTP/LoadGen.pod',
    AUTHOR         => 'Torsten Förtsch <torsten.foertsch@gmx.net>',

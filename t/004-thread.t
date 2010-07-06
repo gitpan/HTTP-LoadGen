@@ -34,7 +34,6 @@ for(
 	HTTP::LoadGen::ramp_up
 	    ($procnr, $nproc, $start, $max, 1, sub {
 	       my ($threadnr)=@_;
-	       #warn "ThreadHnd($threadnr)";
 	       Coro::Timer::sleep 0.1;
 	       SB::incr $sb, $threadnr, 0,
 		   0+sprintf("%.0f", 10*(AE::now-$starttime));

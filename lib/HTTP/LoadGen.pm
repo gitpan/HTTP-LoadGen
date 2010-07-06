@@ -12,7 +12,7 @@ use Coro::Handle;
 use AnyEvent;
 no warnings qw/uninitialized/;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use constant {
   TD_USER=>0,

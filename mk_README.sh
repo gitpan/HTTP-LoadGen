@@ -16,6 +16,14 @@ perl -pe '/^=head1 DESCRIPTION/ and print <STDIN>' lib/HTTP/LoadGen.pod >README.
 
 =item * IPC::ScoreBoard
 
+=item * Coro
+
+=item * AnyEvent
+
+=item * Async::Interrupt
+
+=item * Net::SSLeay
+
 =back
 
 EOF

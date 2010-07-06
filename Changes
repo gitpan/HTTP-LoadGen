@@ -1,4 +1,9 @@
 Revision history for Perl extension HTTP::LoadGen.
 
+0.02  Tue Jul  6 14:21:09 CEST 2010
+      - fix a typo in ScoreBoard.pm
+      - add missing dependencies to Makefile.PL
+      - make it work on my freebsd72
+
 0.01  Tue Jun 22 20:07:19 CEST 2010
       - initial version

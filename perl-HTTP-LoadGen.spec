@@ -9,7 +9,7 @@ Requires:     perl = %{perl_version} perl-IPC-ScoreBoard
 BuildRequires: perl = %{perl_version} perl-IPC-ScoreBoard
 Autoreqprov:  on
 Summary:      %{pln}
-Version:      0.01
+Version:      0.02
 Release:      1
 Source:       %{ppn}-%{version}.tar.gz
 BuildRoot:    %{_tmppath}/%{name}-%{version}-build
