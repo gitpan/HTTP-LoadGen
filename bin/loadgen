@@ -3,7 +3,7 @@
 
 use strict;
 
-use HTTP::LoadGen;
+use HTTP::LoadGen qw/:all -rand/;
 
 my ($o, $fn);
 my $usage=<<'USAGE';
@@ -16,20 +16,23 @@ Usage: loadgen configfile
   behave accordingly.
 USAGE
 
+my @param;
+
 if( @ARGV and $ARGV[0]!~/^--?h/ ) {
-  $o=do ($fn=$ARGV[0]);
+  @param=do ($fn=$ARGV[0]);
 } elsif( !@ARGV or $ARGV[0] eq '-' ) {
   $fn="STDIN";
-  local $/;
-  $o=eval readline STDIN;
+  @param=eval do {local $/; readline STDIN};
 } else {
   warn $usage;
   exit 0;
 }
 
-die "Cannot parse $fn: ".($@||"$!\n")."\n".$usage unless ($o);
+die "Cannot parse $fn: ".($@||"$!\n")."\n".$usage unless (@param);
 
-HTTP::LoadGen::loadgen $o;
+HTTP::LoadGen::loadgen @param;
+exit 0;
+
 __END__
 
 =encoding utf8

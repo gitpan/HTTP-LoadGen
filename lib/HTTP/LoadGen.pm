@@ -11,8 +11,22 @@ use Coro::Timer ();
 use Coro::Handle;
 use AnyEvent;
 no warnings qw/uninitialized/;
+use Exporter ();
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
+
+BEGIN {
+  our %EXPORT_TAGS=
+    (
+     common=>[qw!loadgen threadnr done userdata options rng rnd delay!],
+     const=>\@HTTP::LoadGen::Run::EXPORT,
+    );
+  my %seen;
+  foreach my $v (values %EXPORT_TAGS) {
+    undef @seen{@$v} if @$v;
+  }
+  our @EXPORT_OK=@{$EXPORT_TAGS{all}=[keys %seen]};
+}
 
 use constant {
   TD_USER=>0,
@@ -26,10 +40,34 @@ our $o;				# the global config hash
 
 sub rnd;			# predeclaration
 sub import {
-  shift;
-  foreach (@_) {
-    *CORE::GLOBAL::rand=\&rnd if $_ eq '-rand';
-  }
+  my $name=shift;
+  local *export=\&Exporter::export;
+  Exporter::export_to_level $name, 1, $name, map {
+    my $what=$_; local $_;
+    if($what eq '-rand') {
+      *CORE::GLOBAL::rand=\&rnd;
+      ();
+    } elsif($what eq ':all') {
+      our %EXPORT_TAGS;
+      unless( exists $EXPORT_TAGS{sb} ) {
+	require HTTP::LoadGen::ScoreBoard;
+	require HTTP::LoadGen::Logger;
+	HTTP::LoadGen::ScoreBoard->import
+	    (@HTTP::LoadGen::ScoreBoard::EXPORT_OK);
+	*get_logger=\&HTTP::LoadGen::Logger::get;
+	$EXPORT_TAGS{sb}=\@HTTP::LoadGen::ScoreBoard::EXPORT_OK;
+	$EXPORT_TAGS{log}=[qw!get_logger!];
+	my %seen;
+	foreach my $v (values %EXPORT_TAGS) {
+	  undef @seen{@$v} if @$v;
+	}
+	our @EXPORT_OK=@{$EXPORT_TAGS{all}=[keys %seen]};
+      }
+      $what;
+    } else {
+      $what;
+    }
+  } @_;
 }
 
 sub create_proc {
@@ -133,7 +171,7 @@ sub userdata () : lvalue {$$td->[TD_USER]}
 sub options () {$o}
 sub rng () : lvalue {$$td->[TD_RNG]}
 
-sub rnd ($) {
+sub rnd (;$) {
   my $rng=rng;
   (ref $rng eq 'CODE' ? $rng->($_[0]||1) :
    ref $rng ? $rng->rand($_[0]||1) :

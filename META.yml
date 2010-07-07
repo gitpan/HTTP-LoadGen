@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:                HTTP-LoadGen
-version:             0.04
+version:             0.05
 abstract:            a HTTP load generator toolset
 license:             ~
 author:              

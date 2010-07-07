@@ -8,9 +8,11 @@ HTTP::LoadGen - a HTTP load generator toolset
 
  use HTTP::LoadGen;
 
+ use HTTP::LoadGen qw/:all/;
+
  # ask import() to replace the built-in 'rand' operator by our
  # thread-specific RNG (uses *CORE::GLOBAL::rand)
- use HTTP::LoadGen qw/-rand/;
+ use HTTP::LoadGen qw/-rand :all/;
 
  ######################
  # the load generator #
@@ -996,25 +998,52 @@ STDERR.
 
 =head1 EXPORT
 
-None.
+The following L<Exporter> tags are defined:
+
+=over 4
+
+=item common
+
+exports C<loadgen>, C<threadnr>, C<done>, C<userdata>, C<options>,
+C<rng>, C<rnd> and C<delay>
+
+=item const
+
+exports all symbols that L<HTTP::LoadGen::Run> exports by default.
+
+=item all
+
+all of the above.
+
+Additionally it pulls in L<HTTP::LoadGen::ScoreBoard> and exports all
+that is exported by it.
+
+Also, L<HTTP::LoadGen::ScoreBoard> is loaded. Then function named
+C<get_logger> is created as an alias for C<HTTP::LoadGen::Logger::get>
+and exported.
+
+=back
 
 =head1 EXAMPLE CONFIGURATION
 
- use strict;
- use HTTP::LoadGen::Run;	# use RQ_, RC_ and KEEPALIVE_ constants
- use HTTP::LoadGen::Logger;	# a logger
- use HTTP::LoadGen::ScoreBoard;	# and a scoreboard
- use Math::Random::MT;		# to implement a thread-specific RNG
+#!/usr/bin/loadgen
+# -*-perl-*-
 
- # possible hook parameters:
- # $procnr   -- the current process number 0 .. NWorker-1
- # $el       -- an URL element to fetch (ARRAY)
- #              use RQ_* constants from HTTP::LoadGen::Run to access
- # $rc       -- an result element (ARRAY)
- #              use RC_* constants from HTTP::LoadGen::Run to access
+use strict;
+use Math::Random::MT;
+use Coro;
+use Coro::Timer ();
+no warnings 'ambiguous';
 
- my $logger;
- {
+# possible hook parameters:
+# $procnr   -- the current process number 0 .. NWorker-1
+# $el       -- an URL element to fetch (ARRAY)
+#              use RQ_* constants from HTTP::LoadGen::Run to access
+# $rc       -- an result element (ARRAY)
+#              use RC_* constants from HTTP::LoadGen::Run to access
+
+my $logger;
++{
   NWorker=>3,			# use 3 processes
   RampUpStart=>2,		# start 2 threads immediately
   RampUpMax=>13,		# then add 11 threads over 5 seconds
@@ -1024,24 +1053,23 @@ None.
     # no parameters
 
     # create scoreboard
-    HTTP::LoadGen::ScoreBoard::init 'scoreboard.sb',
-	@{HTTP::LoadGen::options()}{qw/NWorker SbSlotsz SbExtra/};
+    sbinit undef, options->{NWorker};
   },
   ParentExit=>sub {
     # no parameters
-    undef HTTP::LoadGen::ScoreBoard::scoreboard;
+    undef scoreboard;
   },
 
   ProcInit=>sub {
     my ($procnr)=@_;
 
     # set my slot number
-    HTTP::LoadGen::ScoreBoard::slot=$procnr;
+    slot=$procnr;
 
     # acquire a logger
     my $fmt='%-2d %d %d %2d %2d %3d %3d %.3f %.3f %.3f %.3f %.3f %s %d '.
-	    "%s(%s://%s:%s%s)\n";
-    $logger=HTTP::LoadGen::Logger::get undef, sub {sprintf $fmt, @_};
+	    "%s(%s://%s:%s%s) %s\n";
+    $logger=get_logger undef, sub {sprintf $fmt, @_};
   },
   ProcExit=>sub {
     my ($procnr)=@_;
@@ -1052,29 +1080,26 @@ None.
     # no parameters
 
     # thread accounting
-    HTTP::LoadGen::ScoreBoard::thread_start;
+    thread_start;
 
     # set a thread specific RNG
-    HTTP::LoadGen::rng=Math::Random::MT->new(HTTP::LoadGen::threadnr);
+    rng=Math::Random::MT->new(threadnr);
 
     return [];			# initializes thread specific user data
   },
   ThreadExit=>sub {
     # no parameters
-    HTTP::LoadGen::ScoreBoard::thread_done;
+    thread_done;
   },
 
   ReqStart=>sub {
     my ($el)=@_;
 
     # request accounting
-    HTTP::LoadGen::ScoreBoard::req_start;
+    req_start;
 
     # started - succeeded - failed = currently pending number of requests
-    @{HTTP::LoadGen::userdata()}=(HTTP::LoadGen::ScoreBoard::thread_count,
-				  HTTP::LoadGen::ScoreBoard::req_started
-				  -HTTP::LoadGen::ScoreBoard::req_success()
-				  -HTTP::LoadGen::ScoreBoard::req_failed());
+    @{userdata()}=(thread_count, req_started-req_success-req_failed);
   },
 
   ReqDone=>sub {
@@ -1082,14 +1107,13 @@ None.
 
     # request accounting: HTTP status 2xx and 3xx are successful
     #                     other requests are counted as failures.
-    HTTP::LoadGen::ScoreBoard::req_done
-	scalar($rc->[RC_STATUS]=~/^[23]/), $rc->[RC_HEADERS], $rc->[RC_BODY];
+    req_done +($rc->[RC_STATUS]=~/^[23]/), $rc->[RC_HEADERS], $rc->[RC_BODY];
 
-    $logger->(HTTP::LoadGen::threadnr,
+    $logger->(threadnr,
 	      @{$rc}[RC_DNSCACHED, RC_CONNCACHED],
-	      @{HTTP::LoadGen::userdata()},
-	      HTTP::LoadGen::ScoreBoard::req_success,
-	      HTTP::LoadGen::ScoreBoard::req_failed,
+	      @{userdata()},
+	      req_success,
+	      req_failed,
 	      $rc->[RC_STARTTIME],
 	      $rc->[RC_CONNTIME]-$rc->[RC_STARTTIME],
 	      $rc->[RC_FIRSTTIME]-$rc->[RC_STARTTIME],
@@ -1097,7 +1121,8 @@ None.
 	      $rc->[RC_BODYTIME]-$rc->[RC_STARTTIME],
 	      $rc->[RC_STATUS],
 	      length($rc->[RC_BODY]),
-	      @{$el}[RQ_METHOD, RQ_SCHEME, RQ_HOST, RQ_PORT, RQ_URI]);
+	      @{$el}[RQ_METHOD, RQ_SCHEME, RQ_HOST, RQ_PORT, RQ_URI],
+	      $rc->[RC_STATUSLINE]);
   },
 
   dnscache=>{
@@ -1109,7 +1134,7 @@ None.
 
   times=>3,			# run the URL list 3 times
 
-  InitURLs=>'random_start_follow',
+  InitURLs=>'random_start',
 
   URLList=>do {
     my $o={
@@ -1117,7 +1142,8 @@ None.
 	   qw!predelay 0.05 prejitter 0.1 postdelay 0.5 postjitter 1!,
 	  };
     [[qw!GET http foertsch.name 80 /-redir!, $o],
-     [qw!HUGO https www.kabatinte.net 443 /!, $o]];
+     [qw!HUGO https www.kabatinte.net 443 /!, $o]
+    ];
   },
  }
 

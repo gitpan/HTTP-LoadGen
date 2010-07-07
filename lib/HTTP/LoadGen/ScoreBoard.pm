@@ -13,7 +13,12 @@ package HTTP::LoadGen::ScoreBoard;
 use strict;
 use IPC::ScoreBoard;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
+
+use Exporter qw/import/;
+our @EXPORT_OK=qw/scoreboard sb slot thread_start thread_done req_start
+		  req_done thread_count req_started req_success req_failed
+		  header_bytes header_count body_bytes sbinit/;
 
 use constant {
   SC_THREADCOUNT=>0,		# scoreboard items
@@ -167,6 +172,8 @@ BEGIN {
   }
 }
 
+*sbinit=\&init;
+
 1;
 __END__
 
@@ -259,6 +266,9 @@ by the C<scoreboard> function.
 The C<$name> parameter may be C<undef> to create an anonymous scoreboard
 or contain a file name for a named one.
 
+C<sbinit> is an alias for C<init> that is exported on demand while C<init>
+is not.
+
 =head3 $sb=HTTP::LoadGen::ScoreBoard::scoreboard
 
 returns the scoreboard recently created by C<init>.
@@ -346,7 +356,9 @@ returns the number of bytes received so far as HTTP content.
 
 =head2 EXPORT
 
-None.
+exports on demand C<scoreboard>, C<slot>, C<thread_start>, C<thread_done>,
+C<req_start>, C<req_done>, C<thread_count>, C<req_started>, C<req_success>,
+C<req_failed>, C<header_bytes>, C<header_count>, C<body_bytes> and C<sbinit>
 
 =head1 SEE ALSO
 

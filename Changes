@@ -1,5 +1,8 @@
 Revision history for Perl extension HTTP::LoadGen.
 
+0.05  x
+      - small change in cmdline loadgen
+
 0.04  Wed Jul  7 15:34:41 CEST 2010
       - 004-thread.t regards the DURATION env var (default 10) to make
       	the test more reliable
