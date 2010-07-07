@@ -12,12 +12,13 @@ use Coro::Handle;
 use AnyEvent;
 no warnings qw/uninitialized/;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use constant {
   TD_USER=>0,
   TD_RNG=>1,
   TD_THREADNR=>2,
+  TD_DONE=>3,
 };
 
 my $td;				# thread specific data
@@ -127,6 +128,7 @@ sub ramp_up {
 }
 
 sub threadnr () {$$td->[TD_THREADNR]}
+sub done () : lvalue {$$td->[TD_DONE]}
 sub userdata () : lvalue {$$td->[TD_USER]}
 sub options () {$o}
 sub rng () : lvalue {$$td->[TD_RNG]}
@@ -266,7 +268,9 @@ sub loadgen {
     $o->{after}=sub {
       my ($rc, $el)=@_;
       $o->{ReqDone}->($rc, $el) if exists $o->{ReqDone};
+      return 1 if done;
       delay 'post', $el->[5];
+      return;
     };
 
     if( exists $o->{InitURLs} ) {

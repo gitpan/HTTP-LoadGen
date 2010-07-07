@@ -20,23 +20,14 @@ my $logger;
 +{
   NWorker=>3,			# use 3 processes
   RampUpStart=>2,		# start 2 threads immediately
-  RampUpMax=>40,		# then add 11 threads over 5 seconds
-  RampUpDuration=>20,		# that makes 2.2 new threads per second
+  RampUpMax=>13,		# then add 11 threads over 5 seconds
+  RampUpDuration=>5,		# that makes 2.2 new threads per second
 
   ParentInit=>sub {
     # no parameters
 
     # create scoreboard
-    HTTP::LoadGen::ScoreBoard::init 'scoreboard.sb',
-	@{HTTP::LoadGen::options()}{qw/NWorker SbSlotsz SbExtra/};
-    async {
-      while(1) {
-	Coro::Timer::sleep 0.5;
-	warn "tc=".HTTP::LoadGen::ScoreBoard::thread_count.", done=".
-	  (HTTP::LoadGen::ScoreBoard::req_success+
-	   HTTP::LoadGen::ScoreBoard::req_failed)."\n";
-      }
-    };
+    HTTP::LoadGen::ScoreBoard::init undef, HTTP::LoadGen::options->{NWorker};
   },
   ParentExit=>sub {
     # no parameters
@@ -118,17 +109,17 @@ my $logger;
 	     'foertsch.name'=>'109.73.51.50',
 	    },
 
-  times=>50,			# run the URL list 3 times
+  times=>3,			# run the URL list 3 times
 
-  xInitURLs=>'random_start_follow',
+  InitURLs=>'random_start',
 
   URLList=>do {
     my $o={
 	   keepalive=>KEEPALIVE,
-	   qw!predelay 0.05 prejitter 0.1 postdelay 0.5 postjitter 1!,
+	   qw!predelay 0.05 prejitter 0.1 postdelay 0,5 postjitter 1!,
 	  };
     [[qw!GET http foertsch.name 80 /-redir!, $o],
-    # [qw!HUGO https www.kabatinte.net 443 /!, $o]
+     [qw!HUGO https www.kabatinte.net 443 /!, $o]
     ];
   },
  }

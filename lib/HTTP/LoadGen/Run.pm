@@ -362,13 +362,14 @@ sub run_urllist {
   local $dnscache=$dnscache;
   $dnscache=$o->{dnscache} if exists $o->{dnscache};
 
-  $times||=1;
-  for( my $i=0; $i<$times; $i++ ) {
+  for( my $i=0; $times<=0 or $i<$times; $i++ ) {
     my ($el, $rc);
     for( my $it=$itgenerator->(); $el=$it->($rc, $el); ) {
       $before->($el) if $before;
       $rc=run_url @$el;
-      $after->($rc, $el) if $after;
+      if($after) {
+	$after->($rc, $el) and return;
+      }
     }
   }
 }

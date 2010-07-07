@@ -15,6 +15,8 @@ use AnyEvent;
 my $sb;
 my $starttime;
 
+my $dur=$ENV{DURATION}||10;
+
 for(
     [3, 5, 5, 3, [1], [1], [1], [1], [1]],
     [3, 2, 7, 27, [1], [1], [3], [5], [7], [9], [11]],
@@ -32,17 +34,17 @@ for(
       }, sub {
 	my ($procnr)=@_;
 	HTTP::LoadGen::ramp_up
-	    ($procnr, $nproc, $start, $max, 1, sub {
+	    ($procnr, $nproc, $start, $max, $dur, sub {
 	       my ($threadnr)=@_;
-	       Coro::Timer::sleep 0.1;
+	       Coro::Timer::sleep 0.1*$dur;
 	       SB::incr $sb, $threadnr, 0,
-		   0+sprintf("%.0f", 10*(AE::now-$starttime));
+		   0+sprintf("%.0f", 10*(AE::now-$starttime)/$dur);
 	     })->down;
       }, sub {
 	my ($slot)=@_;
 	#warn "$$: ProcExit($slot)--".sprintf("%.0f", 100*(AE::now-$starttime));
 	SB::incr_extra $sb, 0,
-	    0+sprintf("%.0f", 10*(AE::now-$starttime));
+	    0+sprintf("%.0f", 10*(AE::now-$starttime)/$dur);
       };
   for( my $i=0; $i<$max; $i++ ) {
     is_deeply [SB::get_all $sb, $i], $slots[$i],

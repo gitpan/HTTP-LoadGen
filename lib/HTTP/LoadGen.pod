@@ -603,7 +603,7 @@ Example:
 the number of times the URL iterator is charged. That many times the URL list
 is fetched.
 
-Default is C<1>.
+If omitted or C<< <=0 >> the test runs forever.
 
 =item dnscache (optional)
 
@@ -928,6 +928,16 @@ C<$prefix> is a prefix, e.g. C<pre> or C<post>.
 
 C<$param> is a C<RQ_PARAM> hash of a request descriptor containing keys
 C<$prefix.'delay'> and C<$prefix.'jitter'>.
+
+=head3 HTTP::LoadGen::done
+
+if a thread needs a preliminary exit call
+
+ HTTP::LoadGen::done=1
+
+in a C<ReqStart> or C<ReqDone> handler. The current request will be performed
+except for C<postdelay>. Then the thread finishes. This can be used to
+stop the run when a certain load level has been reached.
 
 =head2 Other auxiliary functions
 

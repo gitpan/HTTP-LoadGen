@@ -540,7 +540,7 @@ DESCRIPTION
         the number of times the URL iterator is charged. That many times the
         URL list is fetched.
 
-        Default is 1.
+        If omitted or "<=0" the test runs forever.
 
     dnscache (optional)
         "loadgen" caches DNS query results. One can prevent DNS queries
@@ -836,6 +836,15 @@ DESCRIPTION
 
     $param is a "RQ_PARAM" hash of a request descriptor containing keys
     "$prefix.'delay'" and "$prefix.'jitter'".
+
+   HTTP::LoadGen::done
+    if a thread needs a preliminary exit call
+
+     HTTP::LoadGen::done=1
+
+    in a "ReqStart" or "ReqDone" handler. The current request will be
+    performed except for "postdelay". Then the thread finishes. This can be
+    used to stop the run when a certain load level has been reached.
 
   Other auxiliary functions
    $handle=HTTP::LoadGen::create_proc $nproc, $init_hnd, $hnd, $exit_hnd
