@@ -952,14 +952,15 @@ and wait for a signal to continue with C<$hnd>. C<start_proc> sends that
 signal and waits for all children to finish.
 
 It returns a hash that maps operating system process IDs to their exit
-codes.
+code, killing signal and a coredump flag.
 
 Example:
 
  {
-  '7273' => [7, 0],     # PID 7273 exits normally with code 7
-  '7275' => [0, 11],    # PID 7275 has been killed by signal 11
-  '7274' => [8, 0],     # PID 7274 exits normally with code 8
+  '7273' => [7, 0, 0],     # PID 7273 exits normally with code 7
+  '7275' => [0, 11, 1],    # PID 7275 has been killed by signal 11
+                           #   + core has been dumped
+  '7274' => [8, 0, 0],     # PID 7274 exits normally with code 8
  }
 
 =head3 $semaphore=HTTP::LoadGen::ramp_up $procnr, $nproc, $start, $max, $duration, $handler

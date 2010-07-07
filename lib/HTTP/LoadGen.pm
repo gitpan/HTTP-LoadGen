@@ -12,7 +12,7 @@ use Coro::Handle;
 use AnyEvent;
 no warnings qw/uninitialized/;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use constant {
   TD_USER=>0,
@@ -60,7 +60,7 @@ sub create_proc {
       exit $rc;
     }
     push @watcher, AE::child $pid, sub {
-      $status{$_[0]}=[($_[1]>>8)&0xff, $_[1]&0xff];
+      $status{$_[0]}=[($_[1]>>8)&0xff, $_[1]&0x7f, $_[1]&0x80];
       $sem->up;
     };
     $sem->adjust(-1);
