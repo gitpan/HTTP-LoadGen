@@ -13,7 +13,7 @@ use AnyEvent;
 no warnings qw/uninitialized/;
 use Exporter ();
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 BEGIN {
   our %EXPORT_TAGS=

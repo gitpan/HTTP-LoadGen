@@ -11,6 +11,8 @@ BEGIN {
 }
 
 use strict;
+use warnings;
+no warnings qw!uninitialized!;
 use Coro;
 use Coro::Signal ();
 use AnyEvent;
@@ -18,7 +20,7 @@ use AnyEvent::Socket ();
 use AnyEvent::Handle ();
 use Errno qw/EPIPE/;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use Exporter qw/import/;
 our @EXPORT=qw/RC_STATUS RC_STATUSLINE RC_STARTTIME RC_CONNTIME RC_FIRSTTIME
@@ -111,9 +113,17 @@ sub gen_cb {
 	  sub {$sig->wait unless @queue; @{shift @queue}});
 }
 
+# use push_read($cb) here since the built-in 'line' doesn't handle
+# lines with single embedded \r correctly, e.g. "aa\rbb\r\n" is not
+# accepted as a 'line'
 sub readln {
   my ($handle, $cb, $wait)=@_;
-  $handle->push_read(line=>$cb);
+  $handle->push_read
+    (sub {
+       $_[0]->{rbuf} =~ s/^(([^\015\012]|\015(?!\012))*)(\015?\012)// or return;
+       $cb->($_[0], $1, $2);
+       1;
+     });
   wantarray ? ($wait->())[1,2] : ($wait->())[1];
 }
 
@@ -142,13 +152,14 @@ sub readchunked {
 
 sub readEOF {
   my ($handle, $cb, $wait)=@_;
-  $handle->on_read(sub {});
+  $handle->on_eof(undef);
   $handle->on_error(sub {$cb->(delete $_[0]->{rbuf})});
+  $handle->on_read(sub {});
   ($wait->())[0];
 }
 
 sub config_handle {
-  my ($handle, $cb, $err, $restart, $was_cached)=@_;
+  my ($handle, $cb, $err, $eof, $restart, $was_cached)=@_;
   $handle->on_error
     (sub {
        if ($!==EPIPE || $!==0 and $was_cached) {
@@ -156,7 +167,13 @@ sub config_handle {
        } else {
 	 @{$err}[RC_STATUS, RC_STATUSLINE]=(599, $_[2]);
        }
-       #D warn "Caught Error: $_[2]\n";
+       #D warn "Caught Error: $_[2] / fatal=$_[1]\n";
+       $cb->();
+     });
+  $handle->on_eof
+    (sub {
+       $$eof=1;
+       #D warn "Caught EOF\n";
        $cb->();
      });
   $handle->on_starttls
@@ -176,7 +193,7 @@ sub run_url {
 
   my $store_time;
   my ($cb, $wait)=gen_cb \$store_time;
-  my (@rc, @err, $line);
+  my (@rc, @err, $eof, $line);
 
   #D warn "Starting $method $scheme://$host:$port$uri\n";
 
@@ -217,6 +234,7 @@ sub run_url {
     undef $restart;
     undef $connh;
     undef $store_time;
+    undef $eof;
 
     my $key;
 
@@ -235,7 +253,7 @@ sub run_url {
       #D      $lip.':'.$lport." ==> $ip:$port\n";
 
       $rc[RC_STARTTIME]=$rc[RC_CONNTIME]=AE::now;
-      config_handle $connh, $cb, \@err, \$restart, 1;
+      config_handle $connh, $cb, \@err, \$eof, \$restart, 1;
     } else {
       $rc[RC_CONNCACHED]=0;
       AnyEvent::Socket::tcp_connect $ip, $port, $cb, sub {
@@ -265,7 +283,7 @@ sub run_url {
 					      ? $param->{tls_ctx}
 					      : DEFAULT_TLS_CTX) );
 
-      config_handle $connh, $cb, \@err, \$restart, 0;
+      config_handle $connh, $cb, \@err, \$eof, \$restart, 0;
       if ($scheme eq "https") {
 	#D warn "Starting TLS\n";
 	$connh->starttls("connect");
@@ -276,7 +294,7 @@ sub run_url {
 
     #D warn "Sending Request----------------------------------------\n".
     #D      (build_req $method, $scheme, $host, $port, $uri, $param).
-    #D      "-------------------------------------------------------\n";
+    #D      "Response Header----------------------------------------\n";
 
     $connh->push_write(build_req $method, $scheme, $host, $port, $uri, $param);
 
@@ -287,7 +305,7 @@ sub run_url {
 
     return \@err if @err;		# error
 
-    #D warn "HTTP Status: $line\n";
+    #D warn "$line\n";
     unless (@rc[RC_HTTPVERSION, RC_STATUS, RC_STATUSLINE]=
 	    $line=~m!^HTTP/(\d+\.\d+)\s+(\d+)(?:\s+(.+))!) {
       redo RESTART if length !$line and $rc[RC_CONNCACHED];
@@ -301,7 +319,7 @@ sub run_url {
   $rc[RC_HEADERS]=\my %headers;
   my ($name, $value);
   while (defined($line=readln $connh, $cb, $wait) and length $line) {
-    #D warn "HTTP Header: $line\n";
+    #D warn "$line\n";
     if( ($name, $value)=$line=~/^(\S+)\s*:\s*(.+)/ ) {
       $name=lc $name;
       push @{$headers{$name}}, $value;
@@ -331,8 +349,15 @@ sub run_url {
 
   $rc[RC_BODYTIME]=AE::now;
 
+  #D warn "Response Body------------------------------------------\n".
+  #D      ($ENV{"HTTP__LoadGen__Run__dbg"}>1
+  #D       ? do {my $s=$rc[RC_BODY]; $s=~s/\n?$/\n/; $s}
+  #D       : "BODY omitted: set HTTP__LoadGen__Run__dbg>1 to get it\n").
+  #D      "-------------------------------------------------------\n";
+
   # update connection cache
-  if(exists $param->{keepalive} and 
+  if(!$eof and
+     exists $param->{keepalive} and
      ($param->{keepalive} & KEEPALIVE_STORE) and
      ($rc[RC_HTTPVERSION]>=1.1 &&
       !(exists $headers{connection} and
@@ -343,13 +368,15 @@ sub run_url {
     my $ccel=[$connh, 1];
     #D push @$ccel, $lport, $lip;
     $connh->on_starttls(undef);
+    $connh->on_read(undef);
+    $connh->on_eof(undef);
+    # EOF as well as any other error is now handled by on_error
     $connh->on_error(sub {
 		       #D warn "Connection ($ccel->[3]:$ccel->[2])=>($ip:$port) closed while cached: $_[2]\n";
 		       $ccel->[1]=0;
 		     });
     push @{$conncache{"$ip $port"}}, $ccel;
   }
-  # NOTE: $connh is invalid here!
 
   return \@rc;
 }

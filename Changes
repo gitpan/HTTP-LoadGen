@@ -1,7 +1,12 @@
 Revision history for Perl extension HTTP::LoadGen.
 
-0.05  x
+0.06  Sat Jul 10 18:42:03 CEST 2010
+      - fixed a few cases of unexpected-end-of-file.
+      - cmdline loadgen: better error handling while reading config
+
+0.05  Wed Jul  7 21:24:05 CEST 2010
       - small change in cmdline loadgen
+      - add convenience by exporting a lot of symbols by LoadGen.pm
 
 0.04  Wed Jul  7 15:34:41 CEST 2010
       - 004-thread.t regards the DURATION env var (default 10) to make

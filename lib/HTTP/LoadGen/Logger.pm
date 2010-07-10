@@ -6,12 +6,17 @@ use Coro qw/:prio/;
 use Coro::Channel;
 use Coro::Handle;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 sub get {
   my ($fh, $fmt)=@_;
   my $queue=Coro::Channel->new;
   $fh=\*STDOUT unless $fh;
+  unless( ref $fh ) {
+    my $name=$fh;
+    undef $fh;
+    open $fh, '>>', $name or die "Cannot open logfile $name: $!\n";
+  }
   $fh=unblock $fh;
   my $thr=async {
     my ($fh)=@_;
@@ -57,7 +62,7 @@ HTTP::LoadGen::Logger - a Coro based logger
  use HTTP::LoadGen::Logger;
 
  # get a logger
- $logger=HTTP::LoadGen::Logger::get $filehandle, $formatter;
+ $logger=HTTP::LoadGen::Logger::get $filehandle_or_name, $formatter;
 
  # use it
  $logger->(@data);
@@ -80,9 +85,12 @@ to do all logging output is buffered in RAM.
 
 =head2 Functions
 
-=head3 $logger=HTTP::LoadGen::Logger::get $filehandle, $formatter
+=head3 $logger=HTTP::LoadGen::Logger::get $filehandle_or_name, $formatter
 
 creates a logger that writes to C<$filehandle>.
+
+If a file name is passed it is opened to append. On open failure an execption
+is thrown.
 
 The logger is then used as:
 

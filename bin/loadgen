@@ -22,13 +22,19 @@ if( @ARGV and $ARGV[0]!~/^--?h/ ) {
   @param=do ($fn=$ARGV[0]);
 } elsif( !@ARGV or $ARGV[0] eq '-' ) {
   $fn="STDIN";
-  @param=eval do {local $/; readline STDIN};
+  my $buf='';
+  while(defined (my $l=readline STDIN)) {
+    last if $l=~/\A__(?:END|DATA)__\z/;
+    $buf.=$l;
+  }
+  @param=eval "#line 1 STDIN\n".$buf;
 } else {
   warn $usage;
   exit 0;
 }
 
-die "Cannot parse $fn: ".($@||"$!\n")."\n".$usage unless (@param);
+die "Cannot parse $fn: ".($@||"$!\n")."\n".$usage
+  if @param==1 and !defined $param[0];
 
 HTTP::LoadGen::loadgen @param;
 exit 0;
