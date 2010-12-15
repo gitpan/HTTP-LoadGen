@@ -1,19 +1,10 @@
 package HTTP::LoadGen::ScoreBoard;
 
-#BEGIN {
-#  {
-#    package HTTP::LoadGen::ScoreBoard::_dbg;
-#    use Filter::Simple sub {
-#      s/^(\s*)#D /$1/mg if $ENV{"HTTP__LoadGen__ScoreBoard__dbg"};
-#    };
-#  }
-#  HTTP::LoadGen::ScoreBoard::_dbg->import;
-#}
-
 use strict;
 use IPC::ScoreBoard;
+no warnings 'uninitialized';
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use Exporter qw/import/;
 our @EXPORT_OK=qw/scoreboard sb slot thread_start thread_done req_start
@@ -265,6 +256,8 @@ by the C<scoreboard> function.
 
 The C<$name> parameter may be C<undef> to create an anonymous scoreboard
 or contain a file name for a named one.
+
+=head3 $sb=HTTP::LoadGen::ScoreBoard::sbinit
 
 C<sbinit> is an alias for C<init> that is exported on demand while C<init>
 is not.

@@ -1,5 +1,14 @@
 Revision history for Perl extension HTTP::LoadGen.
 
+0.07  Wed Dec 15 11:05:16 CET 2010
+      - register_iterator / get_iterator
+      - dnscache in Run.pm moved to a my-variable
+      - conncache and tlscache per thread
+      - BUGFIX: wrong postdelay in follow iterators
+      - recognize HTTP codes and methods that do not include response bodies
+      - pod and pod coverage tests
+      - 006-loadgen.t
+
 0.06  Sat Jul 10 18:42:03 CEST 2010
       - fixed a few cases of unexpected-end-of-file.
       - cmdline loadgen: better error handling while reading config

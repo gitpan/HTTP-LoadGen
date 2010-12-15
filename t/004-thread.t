@@ -15,7 +15,7 @@ use AnyEvent;
 my $sb;
 my $starttime;
 
-my $dur=$ENV{DURATION}||10;
+my $dur=$ENV{DURATION}||5;
 
 for(
     [3, 5, 5, 3, [1], [1], [1], [1], [1]],

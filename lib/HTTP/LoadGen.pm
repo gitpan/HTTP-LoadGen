@@ -2,23 +2,31 @@ package HTTP::LoadGen;
 
 use 5.008008;
 use strict;
+no warnings qw/uninitialized/;
+
+sub tlscache ();
+sub conncache ();
 
 use HTTP::LoadGen::Run;
+BEGIN{ HTTP::LoadGen::Run::_dbg->import }
+
 use Coro;
 use Coro::Semaphore ();
 use Coro::Specific ();
 use Coro::Timer ();
 use Coro::Handle;
 use AnyEvent;
-no warnings qw/uninitialized/;
+use AnyEvent::TLS;
 use Exporter ();
+use Scalar::Util ();
 
-our $VERSION = '0.06';
+{our $VERSION = '0.07';}
 
 BEGIN {
   our %EXPORT_TAGS=
     (
-     common=>[qw!loadgen threadnr done userdata options rng rnd delay!],
+     common=>[qw!loadgen threadnr done userdata options rng rnd delay
+		 register_iterator get_iterator follow_3XX!],
      const=>\@HTTP::LoadGen::Run::EXPORT,
     );
   my %seen;
@@ -33,6 +41,8 @@ use constant {
   TD_RNG=>1,
   TD_THREADNR=>2,
   TD_DONE=>3,
+  TD_CONN_CACHE=>4,
+  TD_TLS_CACHE=>5,
 };
 
 my $td;				# thread specific data
@@ -165,6 +175,8 @@ sub ramp_up {
   return $sem;
 }
 
+sub tlscache () {$$td->[TD_TLS_CACHE]}
+sub conncache () {$$td->[TD_CONN_CACHE]}
 sub threadnr () {$$td->[TD_THREADNR]}
 sub done () : lvalue {$$td->[TD_DONE]}
 sub userdata () : lvalue {$$td->[TD_USER]}
@@ -180,105 +192,122 @@ sub rnd (;$) {
 
 sub delay {
   my ($prefix, $param)=@_;
+  return if delete $param->{'skip'.$prefix.'delay'};
   return unless exists $param->{$prefix.'delay'};
   my $sec=$param->{$prefix.'delay'};
   if( exists $param->{$prefix.'jitter'} ) {
     my $jitter=$param->{$prefix.'jitter'};
     $sec+=-$jitter+rnd(2*$jitter);
   }
+  #D warn "\u${prefix}Delay: $sec sec\n";
   Coro::Timer::sleep $sec if $sec>0;
 }
 
-my %services=(http=>80, https=>443);
+my (%services, %known_iterators);
 
-my %known_iterators=
-  (
-   ''=>sub {
-     my $urls=options->{URLList};
-     my $nurls=@$urls;
-     my $i=0;
-     return sub {
-       return if $i>=$nurls;
-       return $urls->[$i++];
-     };
-   },
-   random_start=>sub {
-     my $urls=options->{URLList};
-     my $nurls=@$urls;
-     my ($i, $off)=(0, int rnd $nurls);
-     return sub {
-       return if $i>=$nurls;
-       return $urls->[($off+$i++) % $nurls];
-     };
-   },
-   follow=>sub {
-     my $urls=options->{URLList};
-     my $nurls=@$urls;
-     my $re=qr!^(https?)://([^:/]+)(:[0-9]+)?(.*)!i;
-     my $i=0;
-     my @save_delay;
-     return sub {
-       my ($rc, $el)=@_;
+sub register_iterator {
+  my $code=pop;
+  if( Scalar::Util::reftype $code eq 'CODE' ) {
+    @known_iterators{@_}=($code)x(+@_);
+  } else {
+    die "CODE reference expected";
+  }
+}
 
-       if( $rc->[RC_STATUS]=~/^3/ and
-	   exists $rc->[RC_HEADERS]->{location} and
-	   $rc->[RC_HEADERS]->{location}->[0]=~$re ) {
-	 # follow location
+sub get_iterator {
+  my ($name)=@_;
+  exists $known_iterators{$name} and return $known_iterators{$name};
+  return $known_iterators{''};
+}
 
-	 unless( @save_delay ) {
-	   @save_delay=@{$el->[RQ_PARAM]}{qw/postdelay postjitter/};
-	   @{$el->[RQ_PARAM]}{qw/postdelay postjitter/}=(0,0);
-	 }
+{
+  my %keep=('user-agent'=>1, 'referer'=>1);
+  sub follow_3XX {
+    my ($rc, $el)=@_;
 
-	 my $scheme=lc($1);
-	 return ['GET', $scheme, $2, ($3 ? $3 : $services{$scheme}), $4||'/',
-		 {keepalive=>KEEPALIVE}];
-       }
+    # we are stricter here than most browsers because we do not follow
+    # partial URLs.
+    if( $rc->[RC_STATUS]=~/^3/ and
+	exists $rc->[RC_HEADERS]->{location} and
+	$rc->[RC_HEADERS]->{location}->[0]=~m!^(https?):// # scheme
+					      ([^:/]+)	   # host
+					      (:[0-9]+)?   # optional port
+					      (.*)!ix ) {  # uri
+      # follow location
+      my $scheme=lc($1);
+      my $host=$2;
+      my $port=$3||$services{$scheme};
+      my $uri=$4||'/';
 
-       if( @save_delay ) {
-	 @{$el->[RQ_PARAM]}{qw/postdelay postjitter/}=@save_delay;
-	 @save_delay=();
-       }
+      my @h;
+      if( exists $el->[RQ_PARAM]->{headers} ) {
+	my $hdr=$el->[RQ_PARAM]->{headers};
+	for (my $i=0; $i<@$hdr; $i+=2) {
+	  push @h, $hdr->[$i], $hdr->[$i+1] if exists $keep{lc $hdr->[$i]};
+	}
+      }
 
-       return if $i>=$nurls;
-       return $urls->[$i++];
-     };
-   },
-   random_start_follow=>sub {
-     my $urls=options->{URLList};
-     my $nurls=@$urls;
-     my $re=qr!^(https?)://([^:/]+)(:[0-9]+)?(.*)!i;
-     my ($i, $off)=(0, int rnd $nurls);
-     my @save_delay;
-     return sub {
-       my ($rc, $el)=@_;
+      return ['GET', $scheme, $host, $port, $uri,
+	      {keepalive=>KEEPALIVE, followed=>1, headers=>\@h}];
+    }
+  }
+}
 
-       if( $rc->[RC_STATUS]=~/^3/ and
-	   exists $rc->[RC_HEADERS]->{location} and
-	   $rc->[RC_HEADERS]->{location}->[0]=~$re ) {
-	 # follow location
+BEGIN {
+  %services=(http=>80, https=>443);
 
-	 unless( @save_delay ) {
-	   @save_delay=@{$el->[RQ_PARAM]}{qw/postdelay postjitter/};
-	   @{$el->[RQ_PARAM]}{qw/postdelay postjitter/}=(0,0);
-	 }
+  register_iterator '', default=>sub {
+    my $urls=options->{URLList};
+    my $nurls=@$urls;
+    my $i=0;
+    return sub {
+      return if $i>=$nurls;
+      return $urls->[$i++];
+    };
+  };
 
-	 my $scheme=lc($1);
-	 return ['GET', $scheme, $2, ($3 ? $3 : $services{$scheme}), $4||'/',
-		 {keepalive=>KEEPALIVE}];
-       }
+  register_iterator random_start=>sub {
+    my $urls=options->{URLList};
+    my $nurls=@$urls;
+    my ($i, $off)=(0, int rnd $nurls);
+    return sub {
+      return if $i>=$nurls;
+      return $urls->[($off+$i++) % $nurls];
+    };
+  };
 
-       if( @save_delay ) {
-	 @{$el->[RQ_PARAM]}{qw/postdelay postjitter/}=@save_delay;
-	 @save_delay=();
-       }
+  register_iterator follow=>sub {
+    my %save_delay;
+    my $it=@_ ? $_[0] : get_iterator('')->();
+    return sub {
+      my ($rc, $el)=@_;
 
-       return if $i>=$nurls;
-       return $urls->[($off+$i++) % $nurls];
-     };
-   },
-  );
-$known_iterators{default}=$known_iterators{''};
+      my $next=follow_3XX $rc, $el;
+      return $next if $next;
+
+      delay 'post', \%save_delay;
+
+      # get next request
+      $next=$it->($rc, $el);
+      return unless $next;;
+
+      # save postdelay
+      if( exists $next->[RQ_PARAM]->{postdelay} ) {
+	$save_delay{postdelay}=$next->[RQ_PARAM]->{postdelay};
+	$save_delay{postjitter}=$next->[RQ_PARAM]->{postjitter}
+	  if exists $next->[RQ_PARAM]->{postjitter};
+	$next->[RQ_PARAM]->{skippostdelay}=1;
+      }
+
+      return $next;
+    };
+  };
+
+  register_iterator random_start_follow=>sub {
+    @_=get_iterator('random_start')->();
+    goto &{get_iterator 'follow'};
+  };
+}
 
 sub loadgen {
   local $o=+{@_==1 ? %{$_[0]} : @_};
@@ -286,7 +315,8 @@ sub loadgen {
   my $nproc=($o->{NWorker}||=1);
 
   die "'URLList' or 'InitURLs' invalid"
-    unless (exists $o->{InitURLs} && ref $o->{InitURLs} eq 'CODE' or
+    unless (exists $o->{InitURLs} &&
+	        Scalar::Util::reftype $o->{InitURLs} eq 'CODE' or
 	    exists $o->{URLList} && (!exists $o->{InitURLs} ||
 				     exists $known_iterators{$o->{InitURLs}}));
 
@@ -295,6 +325,9 @@ sub loadgen {
 
     $td=Coro::Specific->new();	# thread specific data
 
+    AnyEvent::TLS::init;
+
+    HTTP::LoadGen::Run::dnscache=$o->{dnscache} if exists $o->{dnscache};
     $o->{ProcInit}->($procnr) if exists $o->{ProcInit};
 
     $o->{before}=sub {
@@ -304,8 +337,8 @@ sub loadgen {
     };
 
     $o->{after}=sub {
-      my ($rc, $el)=@_;
-      $o->{ReqDone}->($rc, $el) if exists $o->{ReqDone};
+      my ($rc, $el, $connh)=@_;
+      $o->{ReqDone}->($rc, $el, $connh) if exists $o->{ReqDone};
       return 1 if done;
       delay 'post', $el->[5];
       return;
@@ -332,6 +365,8 @@ sub loadgen {
 	      my $data=[];
 	      $$td=$data;
 
+	      $data->[TD_CONN_CACHE]={};
+	      $data->[TD_TLS_CACHE]={};
 	      $data->[TD_THREADNR]=$threadnr;
 	      $data->[TD_USER]=$o->{ThreadInit}->() if exists $o->{ThreadInit};
 

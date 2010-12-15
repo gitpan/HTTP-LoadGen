@@ -16,31 +16,44 @@ no warnings qw!uninitialized!;
 use Coro;
 use Coro::Signal ();
 use AnyEvent;
+use AnyEvent::TLS;
 use AnyEvent::Socket ();
 use AnyEvent::Handle ();
 use Errno qw/EPIPE/;
 
-our $VERSION = '0.02';
+{
+  our $VERSION = '0.03';
 
-use Exporter qw/import/;
-our @EXPORT=qw/RC_STATUS RC_STATUSLINE RC_STARTTIME RC_CONNTIME RC_FIRSTTIME
-	       RC_HEADERTIME RC_BODYTIME RC_HEADERS RC_BODY RC_HTTPVERSION
-	       RC_DNSCACHED RC_CONNCACHED
-	       RQ_METHOD RQ_SCHEME RQ_HOST RQ_PORT RQ_URI RQ_PARAM
-	       KEEPALIVE_USE KEEPALIVE_STORE KEEPALIVE/;
+  use Exporter qw/import/;
+  our @EXPORT=qw/RC_STATUS RC_STATUSLINE RC_STARTTIME RC_CONNTIME RC_FIRSTTIME
+		 RC_HEADERTIME RC_BODYTIME RC_HEADERS RC_BODY RC_HTTPVERSION
+		 RC_DNSCACHED RC_CONNCACHED
+		 RQ_METHOD RQ_SCHEME RQ_HOST RQ_PORT RQ_URI RQ_PARAM
+		 KEEPALIVE_USE KEEPALIVE_STORE KEEPALIVE/;
+}
 
 # this is if defined a hash reference.
 # The elements are hostname=>ddd.ddd.ddd.ddd
-# $dnscache is localized in run_urllist() but the original value is copied.
 # It is overwritten only if said so by parameters.
-our $dnscache;
+my $dnscache;
+sub dnscache () : lvalue {$dnscache};
 
 # In normal mode this is "$destip $destport"=>[$connectionhandle1, ...].
 # In debugging mode (if $ENV{"HTTP__LoadGen__Run__dbg"}) $connectionhandle
 # is replaced by [$connectionhandle, $localport, $localip]
 my %conncache;
+sub conncache () {\%conncache}
+{
+  no warnings 'redefine';
+  *conncache=\&HTTP::LoadGen::conncache if exists $INC{'HTTP/LoadGen.pm'};
+}
 
-sub __conncache {\%conncache}
+my %tls_cache;
+sub tlscache () {\%tls_cache}
+{
+  no warnings 'redefine';
+  *tlscache=\&HTTP::LoadGen::tlscache if exists $INC{'HTTP/LoadGen.pm'};
+}
 
 use constant {
   KEEPALIVE_USE=>1,		# use a kept alive connection if available
@@ -68,7 +81,6 @@ use constant {
   RC_CONNCACHED=>11,
 
   DEFAULT_TIMEOUT=>300,		# connection inactivity timeout
-  DEFAULT_TLS_CTX=>{cache=>1},
 };
 
 sub build_req {
@@ -143,7 +155,10 @@ sub readchunked {
     return unless length $xlen;
     $len=hex $xlen;
     #D warn "  --> readchunked: about to read chunk of $len (hex:$xlen) bytes\n";
-    return $body if $len==0;
+    if( $len==0 ) {
+      readln $handle, $cb, $wait; # read the line break after the 0-chunk
+      return $body;
+    }
     $body.=readchunk $handle, $cb, $wait, $len;
     readln $handle, $cb, $wait;	# read the line break after the chunk
     redo;
@@ -156,6 +171,14 @@ sub readEOF {
   $handle->on_error(sub {$cb->(delete $_[0]->{rbuf})});
   $handle->on_read(sub {});
   ($wait->())[0];
+}
+
+sub tlsctx {
+  my ($ctx)=@_;
+  return $ctx unless ref $ctx eq 'HASH';
+  my $c=tlscache;
+warn "c=$c, ctx=$c->{$ctx}";
+  return $c->{$ctx}||=AnyEvent::TLS->new(%$ctx);
 }
 
 sub config_handle {
@@ -188,8 +211,43 @@ sub config_handle {
      });
 }
 
+my @no_response_body_codes;
+my %no_response_body_methods;
+
+sub register_no_response_body_method {
+  $no_response_body_methods{$_[0]}=1;
+}
+
+sub delete_no_response_body_method {
+  delete $no_response_body_methods{$_[0]};
+}
+
+sub register_no_response_body_code {
+  $no_response_body_codes[$_[0]]=1;
+}
+
+sub delete_no_response_body_code {
+  undef $no_response_body_codes[$_[0]];
+}
+
+sub no_response_body {
+  #my ($code, $method)=@_;
+  $no_response_body_codes[$_[0]] ||
+    exists $no_response_body_methods{$_[1]};
+}
+
+BEGIN {
+  for (100..199, 204, 304) {
+    register_no_response_body_code $_;
+  }
+  register_no_response_body_method 'HEAD';
+}
+
 sub run_url {
   my ($method, $scheme, $host, $port, $uri, $param)=@_;
+  $method=uc $method;
+  $scheme=lc $scheme;
+  $host=lc $host;
 
   my $store_time;
   my ($cb, $wait)=gen_cb \$store_time;
@@ -209,7 +267,7 @@ sub run_url {
 	$dnscache->{$host}=$ip=AnyEvent::Socket::format_address $addr[0];
       } else {
 	@err[RC_STATUS, RC_STATUSLINE]=(599, "Cannot resolve host $host");
-	return \@err;
+	return (\@err, undef);
       }
       $rc[RC_DNSCACHED]=0;
     }
@@ -220,12 +278,14 @@ sub run_url {
       $ip=AnyEvent::Socket::format_address $addr[0];
     } else {
       @err[RC_STATUS, RC_STATUSLINE]=(599, "Cannot resolve host $host");
-      return \@err;
+      return (\@err, undef);
     }
     $rc[RC_DNSCACHED]=0;
   }
 
   #D warn "$host resolves to IP $ip".($rc[RC_DNSCACHED]?' (cached)':'')."\n";
+
+  my $conncache=conncache;
 
   my ($connh, $restart);
   #D my ($lip, $lport);		# only used when debugging
@@ -240,8 +300,8 @@ sub run_url {
 
     if( exists $param->{keepalive} and
 	$param->{keepalive}&KEEPALIVE_USE and
-	exists $conncache{$key="$ip $port"} and
-	$connh=do{my $l=$conncache{$key};
+	exists $conncache->{$key="$ip $port"} and
+	$connh=do{my $l=$conncache->{$key};
 		  shift @$l while(@$l and !$l->[0]->[1]); # drop all unusables
 		  shift @$l} ) {
       #D ($lport, $lip)=@{$connh}[2,3];
@@ -265,7 +325,7 @@ sub run_url {
       unless( ($connh)=$wait->() ) {
 	#D warn "Connection to $ip failed: $!";
 	@err[RC_STATUS, RC_STATUSLINE]=(599, "Connection failed: $!");
-	return \@err;
+	return (\@err, $connh);
       }
 
       #D ($lport, $lip)=AnyEvent::Socket::unpack_sockaddr getsockname $connh;
@@ -279,31 +339,42 @@ sub run_url {
 					      ? $param->{timeout}
 					      : DEFAULT_TIMEOUT),
 				    peername=>$host,
-				    tls_ctx=>(exists $param->{tls_ctx}
-					      ? $param->{tls_ctx}
-					      : DEFAULT_TLS_CTX) );
+				    (exists $param->{tls_ctx}
+				     ? (tls_ctx=>tlsctx $param->{tls_ctx})
+				     : ()) );
 
       config_handle $connh, $cb, \@err, \$eof, \$restart, 0;
       if ($scheme eq "https") {
 	#D warn "Starting TLS\n";
-	$connh->starttls("connect");
+	$connh->starttls('connect');
 	$wait->();
-	return \@err if @err;
+	return (\@err, $connh) if @err;
       }
     }
 
-    #D warn "Sending Request----------------------------------------\n".
-    #D      (build_req $method, $scheme, $host, $port, $uri, $param).
-    #D      "Response Header----------------------------------------\n";
+    #D {
+    #D   my $rq=build_req $method, $scheme, $host, $port, $uri, $param;
+    #D   $rq=~s/\n?\z/\n/;
+    #D   warn "--Sending Request----------------------------------------\n".
+    #D        $rq.
+    #D        "--Response Header----------------------------------------\n";
+    #D }
 
     $connh->push_write(build_req $method, $scheme, $host, $port, $uri, $param);
 
     # read status line
     $store_time=\$rc[RC_FIRSTTIME];
     $line=readln $connh, $cb, $wait;
+    #D if( $restart ) {
+    #D   warn "RESTARTING\n".
+    #D        "  line='$line'\n".
+    #D        "----rbuf-----------------------------------------------\n".
+    #D        $connh->{rbuf}.
+    #D        "\n----end of rbuf----------------------------------------\n";
+    #D }
     redo RESTART if $restart;
 
-    return \@err if @err;		# error
+    return (\@err, $connh) if @err; # error
 
     #D warn "$line\n";
     unless (@rc[RC_HTTPVERSION, RC_STATUS, RC_STATUSLINE]=
@@ -311,7 +382,7 @@ sub run_url {
       redo RESTART if length !$line and $rc[RC_CONNCACHED];
 
       @err[RC_STATUS, RC_STATUSLINE]=(599, "Invalid HTTP status line: $line");
-      return \@err;
+      return (\@err, $connh);
     }
   }
 
@@ -325,7 +396,7 @@ sub run_url {
       push @{$headers{$name}}, $value;
     } elsif(!defined $name) {
       @err[RC_STATUS, RC_STATUSLINE]=(599, "Invalid HTTP header block");
-      return \@err;
+      return (\@err, $connh);
     } else {			# MIME continuation lines
       $line=~s/^\s+//;
       my $l=$headers{$name};
@@ -335,25 +406,35 @@ sub run_url {
 
   $rc[RC_HEADERTIME]=AE::now;
 
-  if( exists $headers{'transfer-encoding'} and
-      $headers{'transfer-encoding'}->[0] eq 'chunked' ) {
-    $rc[RC_BODY]=readchunked $connh, $cb, $wait;
-    return \@err if @err;
-  } elsif(exists $headers{'content-length'}) {
-    $rc[RC_BODY]=readchunk $connh, $cb, $wait, $headers{'content-length'}->[0];
-    return \@err if @err;
-  } else {
-    $rc[RC_BODY]=readEOF $connh, $cb, $wait;
-    return \@err if @err;
+  # don't read the response body if the message MUST NOT include one
+  # STATUS 1xx, 204, 304 and HEAD requests
+
+  unless (no_response_body $rc[RC_STATUS], $method) {
+    if( exists $headers{'transfer-encoding'} and
+	$headers{'transfer-encoding'}->[0] ne 'identity' ) {
+      # according to RFC2616 section 4.4 anything other than 'identity'
+      # means 'chunked'
+      $rc[RC_BODY]=readchunked $connh, $cb, $wait;
+      return (\@err, $connh) if @err;
+    } elsif(exists $headers{'content-length'}) {
+      $rc[RC_BODY]=readchunk $connh, $cb, $wait,
+	                     $headers{'content-length'}->[0];
+      return (\@err, $connh) if @err;
+    #} elsif( ct=multipart/byteranges ) {    # not implemented
+    } else {
+      $rc[RC_BODY]=readEOF $connh, $cb, $wait;
+      return (\@err, $connh) if @err;
+    }
   }
 
   $rc[RC_BODYTIME]=AE::now;
 
-  #D warn "Response Body------------------------------------------\n".
+  #D warn "--Response Body------------------------------------------\n".
   #D      ($ENV{"HTTP__LoadGen__Run__dbg"}>1
   #D       ? do {my $s=$rc[RC_BODY]; $s=~s/\n?$/\n/; $s}
-  #D       : "BODY omitted: set HTTP__LoadGen__Run__dbg>1 to get it\n").
-  #D      "-------------------------------------------------------\n";
+  #D       : "BODY omitted: set HTTP__LoadGen__Run__dbg>1 to get it\n")
+  #D   unless(no_response_body $rc[RC_STATUS], $method);
+  #D warn "---------------------------------------------------------\n";
 
   # update connection cache
   if(!$eof and
@@ -375,10 +456,10 @@ sub run_url {
 		       #D warn "Connection ($ccel->[3]:$ccel->[2])=>($ip:$port) closed while cached: $_[2]\n";
 		       $ccel->[1]=0;
 		     });
-    push @{$conncache{"$ip $port"}}, $ccel;
+    push @{$conncache->{"$ip $port"}}, $ccel;
   }
 
-  return \@rc;
+  return (\@rc, $connh);
 }
 
 sub run_urllist {
@@ -386,16 +467,13 @@ sub run_urllist {
   my ($times, $before, $after, $itgenerator)=
     @{$o}{qw/times before after InitURLs/};
 
-  local $dnscache=$dnscache;
-  $dnscache=$o->{dnscache} if exists $o->{dnscache};
-
   for( my $i=0; $times<=0 or $i<$times; $i++ ) {
-    my ($el, $rc);
+    my ($el, $rc, $connh);
     for( my $it=$itgenerator->(); $el=$it->($rc, $el); ) {
       $before->($el) if $before;
-      $rc=run_url @$el;
+      ($rc, $connh)=run_url @$el;
       if($after) {
-	$after->($rc, $el) and return;
+	$after->($rc, $el, $connh) and return;
       }
     }
   }
@@ -414,6 +492,9 @@ HTTP::LoadGen::Run - HTTP client for HTTP::LoadGen
 
  BEGIN {$ENV{HTTP__LoadGen__Run__dbg}=1} # turn on debugging
  use HTTP::LoadGen::Run;
+
+ # where to cache DNS lookup results
+ HTTP::LoadGen::Run::dnscache=\%cache;
 
  # fetch an URL
  $rc=HTTP::LoadGen::Run::run_url $method, $scheme, $host, $port, $uri, $param;
@@ -475,11 +556,77 @@ an optional code reference called as
 after each request. The C<ReqDone> hook in L<HTTP::LoadGen> is implemented
 this way.
 
-=item dnscache
-
-see L<dnscache in HTTP::LoadGen|HTTP::LoadGen/dnscache (optional)>.
-
 =back
+
+=head3 HTTP::LoadGen::Run::dnscache
+
+an lvalue function that allows to set/get a hash where DNS lookup results
+are cached.
+
+=head3 HTTP::LoadGen::Run::register_no_response_body_method $method
+
+register a new HTTP method that is expected to not send a response body
+by default. Normally, C<HEAD> is the only one that shows that behavior.
+
+=head3 HTTP::LoadGen::Run::delete_no_response_body_method $method
+
+delete a method from the set that do not send a response body.
+
+=head3 HTTP::LoadGen::Run::register_no_response_body_code $http_code
+
+register a new HTTP status code that is known to not include a response body
+by default. Normally, C<1xx>, C<204> and C<304> show that behavior.
+
+=head3 HTTP::LoadGen::Run::delete_no_response_body_code $http_code
+
+delete a HTTP status code from the set that do not include a response body.
+
+=head3 $no_body=HTTP::LoadGen::Run::no_response_body $http_code, $method
+
+asks if a pair of HTTP status and request method is expected to include
+a response body.
+
+returns true if the body is omitted.
+
+=head3 HTTP::LoadGen::Run::conncache
+
+the cache of kept-alive connections. Returns a hash ref.
+
+=head3 HTTP::LoadGen::Run::build_req
+
+internal use.
+
+=head3 HTTP::LoadGen::Run::config_handle
+
+internal use.
+
+=head3 HTTP::LoadGen::Run::gen_cb
+
+internal use.
+
+=head3 HTTP::LoadGen::Run::readEOF
+
+internal use.
+
+=head3 HTTP::LoadGen::Run::readchunk
+
+internal use.
+
+=head3 HTTP::LoadGen::Run::readchunked
+
+internal use.
+
+=head3 HTTP::LoadGen::Run::readln
+
+internal use.
+
+=head3 HTTP::LoadGen::Run::tlscache
+
+internal use, experimental.
+
+=head3 HTTP::LoadGen::Run::tlsctx
+
+internal use, experimental.
 
 =head1 EXPORT
 

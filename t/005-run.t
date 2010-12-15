@@ -36,8 +36,8 @@ EOF
 
 my $rc;
 
-$HTTP::LoadGen::Run::dnscache=\my %dns_cache;
-my $conncache=HTTP::LoadGen::Run::__conncache;
+HTTP::LoadGen::Run::dnscache=\my %dns_cache;
+my $conncache=HTTP::LoadGen::Run::conncache;
 
 SKIP: {
 
@@ -46,7 +46,7 @@ SKIP: {
 
   #########################################################################
 
-  $rc=HTTP::LoadGen::Run::run_url
+  ($rc)=HTTP::LoadGen::Run::run_url
     qw!GET http science.ksc.nasa.gov 80 /!, {keepalive=>KEEPALIVE};
 
   #warn Dumper $rc->[RC_HEADERS];
@@ -61,7 +61,7 @@ SKIP: {
 
   #########################################################################
 
-  $rc=HTTP::LoadGen::Run::run_url
+  ($rc)=HTTP::LoadGen::Run::run_url
     qw!GET http 217.86.174.228 8080 /axis-cgi/jpg/image.cgi!, {keepalive=>KEEPALIVE};
 
   #warn Dumper $rc->[RC_HEADERS];
@@ -77,7 +77,7 @@ SKIP: {
   #########################################################################
 }
 
-$rc=HTTP::LoadGen::Run::run_url
+($rc)=HTTP::LoadGen::Run::run_url
   qw!GET http foertsch.name 80 /!, {keepalive=>KEEPALIVE};
 
 #warn Dumper $rc->[RC_HEADERS];
@@ -90,22 +90,22 @@ is 0+keys %$conncache, 1, 'conncache with 1 element';
 is length($rc->[RC_BODY]), $rc->[RC_HEADERS]->{'content-length'}->[0],
   'Body length: '.$rc->[RC_HEADERS]->{'content-length'}->[0];
 
-$rc=HTTP::LoadGen::Run::run_url
+($rc)=HTTP::LoadGen::Run::run_url
   qw!GET http foertsch.name 80 /!, {keepalive=>KEEPALIVE_USE};
 
 is $rc->[RC_CONNCACHED], 1, 'conncache used';
 is 0+@{$conncache->{$dns_cache{'foertsch.name'}.' 80'}}, 0,
   'conncache empty again';
 
-$rc=HTTP::LoadGen::Run::run_url
+($rc)=HTTP::LoadGen::Run::run_url
   qw!GET http foertsch.name 80 /!, {keepalive=>KEEPALIVE_STORE};
-$rc=HTTP::LoadGen::Run::run_url
+($rc)=HTTP::LoadGen::Run::run_url
   qw!GET http foertsch.name 80 /!, {keepalive=>KEEPALIVE_STORE};
 
 is 0+@{$conncache->{$dns_cache{'foertsch.name'}.' 80'}}, 2,
   '2 connections cached for '.$dns_cache{'foertsch.name'}.':80';
 
-$rc=HTTP::LoadGen::Run::run_url
+($rc)=HTTP::LoadGen::Run::run_url
   qw!GET https www.kabatinte.net 443 /!, {keepalive=>KEEPALIVE_STORE};
 
 is $rc->[RC_STATUS], 303, 'https://www.kabatinte.net/ => 303';
@@ -118,6 +118,6 @@ ok $rc->[RC_HEADERTIME]>0, 'HEADERTIME';
 ok $rc->[RC_BODYTIME]>0, 'BODYTIME';
 is $rc->[RC_DNSCACHED], 0, 'DNS cache miss';
 
-$rc=HTTP::LoadGen::Run::run_url qw!GET http www.kabatinte.net 80 /!;
+($rc)=HTTP::LoadGen::Run::run_url qw!GET http www.kabatinte.net 80 /!;
 
 is $rc->[RC_DNSCACHED], 1, 'DNS cache hit';

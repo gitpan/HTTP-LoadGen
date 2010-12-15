@@ -71,13 +71,15 @@ use threads but event-based IO.
 
 =over 4
 
-=item * support for SSL connections
+=item * limited support for SSL connections
 
 =item * keep-alive connections
 
 =item * configurable delay before and after each request
 
 =item * run a list of URLs many times
+
+=item * compute next URL based on the current request
 
 =item * DNS cache can be preinitialized
 
@@ -714,11 +716,39 @@ If the request starting a series of redirections contains a C<postdelay>
 statement (see below) the delay is postponed until after the last
 request of the series. Subsequent requests are issues without delay.
 
+Subsequent requests inherit the C<User-Agent> and C<Referer> HTTP headers
+of the originating request, see
+L<follow_3XX()|/$new_rq=HTTP::LoadGen::follow_3XX $rc, $rq> below.
+
+This iterator is a bit special in that can turn other iterators into
+following ones. Normally an iterator generator is called without parameters.
+This one can take one parameter that in turn may be an iterator.
+It returns then a following iterator based on the passed one.
+
+Infact, the built-in C<random_start_follow> iterator is implemented for
+example as
+
+ register_iterator random_start_follow=>sub {
+    @_=get_iterator('random_start')->();
+    goto &{get_iterator 'follow'};
+ };
+
+To turn your own iterator into a following you could write:
+
+ InitURLs=>sub {
+   return get_iterator->('follow')->($my_own_iterator);
+ }
+
+where C<$my_own_iterator> is an iterator function.
+
 =item random_start_follow
 
 a combination of the 2 above.
 
 =back
+
+You can register your own named iterators by calling
+L<register_iterator|/register_iterator> below.
 
 =item URLList (either InitURLs or URLList or both must be present)
 
@@ -880,9 +910,10 @@ L<AnyEvent::Handle> object.
 
 See L<AnyEvent::Handle> for more information.
 
-This is only used when a SSL connection is made. Default is
-C<< {cache=>1} >> meaning it is allowed to use an SSL session cache.
-If you need to verify the identity of the server it can be configured here.
+By now L<AnyEvent::Handle> supports SSL features like client certificates
+and server certificate verification. However, some things are still missing
+like SSL session caching. How about server initiates renegotiations I am
+not sure.
 
 Note, C<conn_timeout>, C<timeout> and C<tls_ctx> are not very well tested
 by now.
@@ -941,7 +972,37 @@ in a C<ReqStart> or C<ReqDone> handler. The current request will be performed
 except for C<postdelay>. Then the thread finishes. This can be used to
 stop the run when a certain load level has been reached.
 
+=head3 $new_rq=HTTP::LoadGen::follow_3XX $rc, $rq
+
+This function implements the following part of the built-in C<follow>
+iterator.
+
+It is called with the result and the request descriptor of the previous
+request and returns a new request descriptor if the result is a HTTP
+redirect.
+
+Otherwise an empty list is returned.
+
+The new request preserves the C<User-Agent> and C<Referer> request header
+fields.
+
 =head2 Other auxiliary functions
+
+=head3 HTTP::LoadGen::register_iterator $name, $code_ref
+
+registers a known iterator. This can be used by other modules, e.g.
+
+ package My::Iterator;
+ use HTTP::LoadGen ':all';
+ BEGIN {
+   register_iterator 'my_iterator'=>sub {
+     ...
+   };
+ }
+
+=head3 $code_ref=HTTP::LoadGen::get_iterator $name
+
+returns an iterator by name.
 
 =head3 $handle=HTTP::LoadGen::create_proc $nproc, $init_hnd, $hnd, $exit_hnd
 
@@ -989,6 +1050,16 @@ while the load generation is already running. It depends on the
 C<$duration> parameter. Don't expect it to return before the load
 generation starts.
 
+=head2 Internal functions
+
+=over 4
+
+=item HTTP::LoadGen::conncache
+
+=item HTTP::LoadGen::tlscache
+
+=back
+
 =head1 DEBUGGING
 
 Sometimes its useful to see what requests are made. If the environment
@@ -1026,126 +1097,126 @@ and exported.
 
 =head1 EXAMPLE CONFIGURATION
 
-#!/usr/bin/loadgen
-# -*-perl-*-
+ #!/usr/bin/loadgen
+ # -*-perl-*-
 
-use strict;
-use Math::Random::MT;
-use Coro;
-use Coro::Timer ();
-no warnings 'ambiguous';
+ use strict;
+ use Math::Random::MT;
+ use Coro;
+ use Coro::Timer ();
+ no warnings 'ambiguous';
 
-# possible hook parameters:
-# $procnr   -- the current process number 0 .. NWorker-1
-# $el       -- an URL element to fetch (ARRAY)
-#              use RQ_* constants from HTTP::LoadGen::Run to access
-# $rc       -- an result element (ARRAY)
-#              use RC_* constants from HTTP::LoadGen::Run to access
+ # possible hook parameters:
+ # $procnr   -- the current process number 0 .. NWorker-1
+ # $el       -- an URL element to fetch (ARRAY)
+ #              use RQ_* constants from HTTP::LoadGen::Run to access
+ # $rc       -- an result element (ARRAY)
+ #              use RC_* constants from HTTP::LoadGen::Run to access
 
-my $logger;
-+{
-  NWorker=>3,			# use 3 processes
-  RampUpStart=>2,		# start 2 threads immediately
-  RampUpMax=>13,		# then add 11 threads over 5 seconds
-  RampUpDuration=>5,		# that makes 2.2 new threads per second
+ my $logger;
+ +{
+   NWorker=>3,	                # use 3 processes
+   RampUpStart=>2,              # start 2 threads immediately
+   RampUpMax=>13,      	        # then add 11 threads over 5 seconds
+   RampUpDuration=>5,           # that makes 2.2 new threads per second
 
-  ParentInit=>sub {
-    # no parameters
+   ParentInit=>sub {
+     # no parameters
 
-    # create scoreboard
-    sbinit undef, options->{NWorker};
-  },
-  ParentExit=>sub {
-    # no parameters
-    undef scoreboard;
-  },
+     # create scoreboard
+     sbinit undef, options->{NWorker};
+   },
+   ParentExit=>sub {
+     # no parameters
+     undef scoreboard;
+   },
 
-  ProcInit=>sub {
-    my ($procnr)=@_;
+   ProcInit=>sub {
+     my ($procnr)=@_;
 
-    # set my slot number
-    slot=$procnr;
+     # set my slot number
+     slot=$procnr;
 
-    # acquire a logger
-    my $fmt='%-2d %d %d %2d %2d %3d %3d %.3f %.3f %.3f %.3f %.3f %s %d '.
-	    "%s(%s://%s:%s%s) %s\n";
-    $logger=get_logger undef, sub {sprintf $fmt, @_};
-  },
-  ProcExit=>sub {
-    my ($procnr)=@_;
-    $logger->();		# close the logger
-  },
+     # acquire a logger
+     my $fmt='%-2d %d %d %2d %2d %3d %3d %.3f %.3f %.3f %.3f %.3f %s %d '.
+             "%s(%s://%s:%s%s) %s\n";
+     $logger=get_logger undef, sub {sprintf $fmt, @_};
+   },
+   ProcExit=>sub {
+     my ($procnr)=@_;
+     $logger->();               # close the logger
+   },
 
-  ThreadInit=>sub {
-    # no parameters
+   ThreadInit=>sub {
+     # no parameters
 
-    # thread accounting
-    thread_start;
+     # thread accounting
+     thread_start;
 
-    # set a thread specific RNG
-    rng=Math::Random::MT->new(threadnr);
+     # set a thread specific RNG
+     rng=Math::Random::MT->new(threadnr);
 
-    return [];			# initializes thread specific user data
-  },
-  ThreadExit=>sub {
-    # no parameters
-    thread_done;
-  },
+     return [];                 # initializes thread specific user data
+   },
+   ThreadExit=>sub {
+     # no parameters
+     thread_done;
+   },
 
-  ReqStart=>sub {
-    my ($el)=@_;
+   ReqStart=>sub {
+     my ($el)=@_;
 
-    # request accounting
-    req_start;
+     # request accounting
+     req_start;
 
-    # started - succeeded - failed = currently pending number of requests
-    @{userdata()}=(thread_count, req_started-req_success-req_failed);
-  },
+     # started - succeeded - failed = currently pending number of requests
+     @{userdata()}=(thread_count, req_started-req_success-req_failed);
+   },
 
-  ReqDone=>sub {
-    my ($rc, $el)=@_;
+   ReqDone=>sub {
+     my ($rc, $el)=@_;
 
-    # request accounting: HTTP status 2xx and 3xx are successful
-    #                     other requests are counted as failures.
-    req_done +($rc->[RC_STATUS]=~/^[23]/), $rc->[RC_HEADERS], $rc->[RC_BODY];
+     # request accounting: HTTP status 2xx and 3xx are successful
+     #                     other requests are counted as failures.
+     req_done +($rc->[RC_STATUS]=~/^[23]/), $rc->[RC_HEADERS], $rc->[RC_BODY];
 
-    $logger->(threadnr,
-	      @{$rc}[RC_DNSCACHED, RC_CONNCACHED],
-	      @{userdata()},
-	      req_success,
-	      req_failed,
-	      $rc->[RC_STARTTIME],
-	      $rc->[RC_CONNTIME]-$rc->[RC_STARTTIME],
-	      $rc->[RC_FIRSTTIME]-$rc->[RC_STARTTIME],
-	      $rc->[RC_HEADERTIME]-$rc->[RC_STARTTIME],
-	      $rc->[RC_BODYTIME]-$rc->[RC_STARTTIME],
-	      $rc->[RC_STATUS],
-	      length($rc->[RC_BODY]),
-	      @{$el}[RQ_METHOD, RQ_SCHEME, RQ_HOST, RQ_PORT, RQ_URI],
-	      $rc->[RC_STATUSLINE]);
-  },
+     $logger->(threadnr,
+               @{$rc}[RC_DNSCACHED, RC_CONNCACHED],
+               @{userdata()},
+               req_success,
+               req_failed,
+               $rc->[RC_STARTTIME],
+               $rc->[RC_CONNTIME]-$rc->[RC_STARTTIME],
+               $rc->[RC_FIRSTTIME]-$rc->[RC_STARTTIME],
+               $rc->[RC_HEADERTIME]-$rc->[RC_STARTTIME],
+               $rc->[RC_BODYTIME]-$rc->[RC_STARTTIME],
+               $rc->[RC_STATUS],
+               length($rc->[RC_BODY]),
+               @{$el}[RQ_METHOD, RQ_SCHEME, RQ_HOST, RQ_PORT, RQ_URI],
+               $rc->[RC_STATUSLINE]);
+   },
 
-  dnscache=>{
-	     localhost=>'127.0.0.1',
-	     'kabatinte.net'=>'84.38.75.176',
-	     'www.kabatinte.net'=>'84.38.75.176',
-	     'foertsch.name'=>'109.73.51.50',
-	    },
+   dnscache=>{
+              localhost=>'127.0.0.1',
+              'kabatinte.net'=>'84.38.75.176',
+              'www.kabatinte.net'=>'84.38.75.176',
+              'foertsch.name'=>'109.73.51.50',
+             },
 
-  times=>3,			# run the URL list 3 times
+   times=>3,			# run the URL list 3 times
 
-  InitURLs=>'random_start',
+   InitURLs=>'random_start',
 
-  URLList=>do {
-    my $o={
-	   keepalive=>KEEPALIVE,
-	   qw!predelay 0.05 prejitter 0.1 postdelay 0.5 postjitter 1!,
-	  };
-    [[qw!GET http foertsch.name 80 /-redir!, $o],
-     [qw!HUGO https www.kabatinte.net 443 /!, $o]
-    ];
-  },
- }
+   URLList=>do {
+     my $o={
+            keepalive=>KEEPALIVE,
+            qw!predelay 0.05 prejitter 0.1 postdelay 0.5 postjitter 1!,
+           };
+     [[qw!GET http foertsch.name 80 /-redir!, $o],
+      [qw!HUGO https www.kabatinte.net 443 /!, $o]
+     ];
+   },
+  }
 
 =head1 SEE ALSO
 
